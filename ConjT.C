@@ -1,0 +1,149 @@
+/*---------------------------------------------------------------------------*\
+  =========                 |
+  \\      /  F ield         | foam-extend: Open Source CFD
+   \\    /   O peration     | Version:     4.1
+    \\  /    A nd           | Web:         http://www.foam-extend.org
+     \\/     M anipulation  | For copyright notice see file Copyright
+-------------------------------------------------------------------------------
+License
+    This file is part of foam-extend.
+
+    foam-extend is free software: you can redistribute it and/or modify it
+    under the terms of the GNU General Public License as published by the
+    Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    foam-extend is distributed in the hope that it will be useful, but
+    WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with foam-extend.  If not, see <http://www.gnu.org/licenses/>.
+
+Application
+    pimpleDyMFoam.C
+
+Description
+    Transient solver for incompressible, turbulent flow of Newtonian fluids
+    with dynamic mesh using the PIMPLE (merged PISO-SIMPLE) algorithm.
+
+    Turbulence modelling is generic, i.e. laminar, RAS or LES may be selected.
+
+    Consistent formulation without time-step and relaxation dependence by Jasak
+
+    Support for immersed boundary
+
+Author
+    Hrvoje Jasak, Wikki Ltd.  All rights reserved
+
+\*---------------------------------------------------------------------------*/
+
+#include "fvCFD.H"
+#include "singlePhaseTransportModel.H"
+#include "turbulenceModel.H"
+#include "dynamicFvMesh.H"
+#include "pimpleControl.H"
+
+#include "immersedBoundaryPolyPatch.H"
+#include "immersedBoundaryFvPatch.H"
+#include "emptyFvPatch.H"
+#include <fstream>
+#include <iostream>
+#include "OFstream.H"
+#include "SortableList.H"
+
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+void findCellCells
+(
+    const point& location,
+    const labelList& ibc,
+    labelList& cellCells, 
+    const vectorField& cellCentres
+) 
+{
+    scalarField distances(ibc.size(), 0);
+    const vectorField& C = cellCentres;
+    forAll (distances, cellI)
+    {
+		//~ if(C[ibc[cellI]].x()-SMALL>location.x()||C[ibc[cellI]].y()-SMALL>location.y())
+		//~ {
+			distances[cellI] = magSqr(C[ibc[cellI]]- location);
+		//~ }
+		//~ else
+		//~ {
+			//~ distances[cellI]=GREAT;
+		//~ }
+    }
+    SortableList<scalar> sortedDistances(distances);
+    labelList sortedCells(ibc.size(), -1);
+    for (label i = 0; i < sortedCells.size(); i++)
+    {
+        sortedCells[i] = ibc[sortedDistances.indices()[i]];
+    }
+    cellCells = sortedCells;
+}
+int main(int argc, char *argv[])
+{
+#   include "setRootCase.H"
+
+#   include "createTime.H"
+#   include "createDynamicFvMesh.H"
+//--------------------------------------------------------------------------------------
+#   include "newMesh.H"
+//--------------------------------------------------------------------------------------
+    pimpleControl pimple(mesh);
+
+#   include "initContinuityErrs.H"
+#   include "createIbMasks.H"
+#   include "createFields.H"
+#   include "createControls.H"
+    const unallocLabelList& own = mesh.owner();
+    const unallocLabelList& nei = mesh.neighbour();
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+		std::ofstream nuss;
+    Info<< "\nStarting time loop\n" << endl;
+
+    while (runTime.run())
+    {
+#       include "readControls.H"
+#       include "immersedBoundaryCourantNo.H"
+#       include "setDeltaT.H"
+
+        runTime++;
+
+        Info<< "Time = " << runTime.timeName() << nl << endl;
+
+#       include "correctMeshMotion.H"
+
+        // --- PIMPLE loop
+        while (pimple.loop())
+        {
+#           include "UEqn.H"
+
+            // --- PISO loop
+            while (pimple.correct())
+            {
+#               include "pEqn.H"
+            }
+
+            turbulence->correct();
+
+
+        }
+#           include "TEqn.H"
+
+        runTime.write();
+
+        Info<< "ExecutionTime = " << runTime.elapsedCpuTime() << " s"
+            << "  ClockTime = " << runTime.elapsedClockTime() << " s"
+            << nl << endl;
+    }
+
+    Info<< "End\n" << endl;
+
+    return 0;
+}
+
+
+// ************************************************************************* //
